@@ -1,0 +1,16 @@
+[package]
+name = "voxel-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = { version = "0.13.2", default-features = false, features = [
+    "bevy_winit",
+    "multi-threaded",
+    "bevy_debug_stepping",
+    "x11",
+    "wayland",
+] }
+bytemuck = "1.16.1"
+pollster = "0.3.0"
+wgpu = "0.20.1"
