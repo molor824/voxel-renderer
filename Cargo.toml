@@ -13,4 +13,4 @@ bevy = { version = "0.13.2", default-features = false, features = [
 ] }
 bytemuck = "1.16.1"
 pollster = "0.3.0"
-wgpu = "0.20.1"
+wgpu = "22.0.0"

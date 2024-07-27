@@ -1,32 +1,16 @@
-use std::ops::Range;
+use std::mem::transmute;
 
 use crate::*;
 use bevy::app::AppExit;
-use bevy::transform::TransformSystem;
-use bevy::utils::HashMap;
 use bevy::window::{PrimaryWindow, RawHandleWrapper, WindowResized};
 use wgpu::*;
 
-#[derive(Component, Deref)]
-pub struct RenderPipeline(pub wgpu::RenderPipeline);
-#[derive(Component, Deref)]
-pub struct Buffer(pub wgpu::Buffer);
-#[derive(Component, Deref)]
-pub struct BindGroup(pub wgpu::BindGroup);
-#[derive(Component)]
-pub struct Material {
-    pub pipeline: Entity,
-    pub bind_groups: HashMap<usize, Entity>,
+pub struct RenderPassContainer {
+    pub texture: SurfaceTexture,
+    pub render_pass: RenderPass<'static>,
+    pub view: Box<TextureView>,
+    pub encoder: Box<CommandEncoder>,
 }
-#[derive(Component)]
-pub struct Mesh {
-    pub material: Entity,
-    pub vertex_buffers: HashMap<usize, Entity>,
-    pub index_buffer: Option<Entity>,
-    pub vertex_range: Range<u32>,
-    pub instance_range: Range<u32>,
-}
-
 #[derive(Resource)]
 pub struct Renderer {
     pub(super) instance: Instance,
@@ -35,6 +19,9 @@ pub struct Renderer {
     pub(super) config: SurfaceConfiguration,
     pub(super) device: Device,
     pub(super) queue: Queue,
+    pub(super) render_pass: Option<RenderPassContainer>,
+    pub(super) depth_texture: Texture,
+    pub(super) depth_view: TextureView,
 }
 impl Renderer {
     fn resize(&mut self, width: u32, height: u32) {
@@ -45,7 +32,26 @@ impl Renderer {
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
 
+        self.depth_texture = Self::create_depth_texture(&self.device, &self.config);
+        self.depth_view = self.depth_texture.create_view(&Default::default());
+
         info!("Surface resized to {}x{}", width, height);
+    }
+    fn create_depth_texture(device: &Device, config: &SurfaceConfiguration) -> Texture {
+        device.create_texture(&TextureDescriptor {
+            label: Some("Depth texture"),
+            size: Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Depth32Float,
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
     }
 }
 impl FromWorld for Renderer {
@@ -57,12 +63,14 @@ impl FromWorld for Renderer {
             } else {
                 InstanceFlags::empty()
             },
-            ..Default::default()
+            dx12_shader_compiler: Dx12Compiler::default(),
+            gles_minor_version: Gles3MinorVersion::default(),
         });
 
         let mut handle_q =
             world.query_filtered::<(&RawHandleWrapper, &Window), With<PrimaryWindow>>();
-        let (raw_handle, window) = handle_q.single(world);
+        let (raw_handle, window) = handle_q.single_mut(world);
+
         let surface = unsafe {
             instance.create_surface_unsafe(SurfaceTargetUnsafe::RawHandle {
                 raw_display_handle: raw_handle.display_handle,
@@ -74,7 +82,7 @@ impl FromWorld for Renderer {
         let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
-            ..Default::default()
+            force_fallback_adapter: false,
         }))
         .expect("No suitable adapters found.");
 
@@ -85,13 +93,18 @@ impl FromWorld for Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(
             &DeviceDescriptor {
                 label: Some("Request device"),
-                ..Default::default()
+                required_features: Features::MAPPABLE_PRIMARY_BUFFERS,
+                required_limits: Limits::downlevel_defaults(),
+                memory_hints: MemoryHints::Performance,
             },
             None,
         ))
         .unwrap();
 
         surface.configure(&device, &config);
+
+        let depth_texture = Self::create_depth_texture(&device, &config);
+        let depth_view = depth_texture.create_view(&Default::default());
 
         Self {
             instance,
@@ -100,6 +113,9 @@ impl FromWorld for Renderer {
             config,
             device,
             queue,
+            render_pass: None,
+            depth_texture,
+            depth_view,
         }
     }
 }
@@ -121,6 +137,7 @@ fn handle_surface_error(
                 renderer.resize(window.physical_width(), window.physical_height());
             }
             SurfaceError::OutOfMemory => {
+                error!("Out of memory!");
                 app_exit_event.send(AppExit);
                 return;
             }
@@ -128,108 +145,122 @@ fn handle_surface_error(
         }
     }
 }
-fn on_resize(
-    mut renderer: ResMut<Renderer>,
-    window_q: Query<&Window, With<PrimaryWindow>>,
-    mut resize_event: EventReader<WindowResized>,
-) {
-    for event in resize_event.read() {
-        match window_q.get(event.window) {
-            Ok(window) => {
-                renderer.resize(window.physical_width(), window.physical_height());
-                return;
-            }
-            Err(_) => {}
-        }
+fn on_resize(mut renderer: ResMut<Renderer>, window_q: Query<&Window, With<PrimaryWindow>>) {
+    let window = window_q.single();
+    if window.physical_width() == renderer.config.width
+        && window.physical_height() == renderer.config.height
+    {
+        return;
     }
+
+    renderer.resize(window.physical_width(), window.physical_height());
 }
-fn render(
-    renderer: ResMut<Renderer>,
+fn render_begin(
+    mut renderer: ResMut<Renderer>,
     clear_color: Option<Res<ClearColor>>,
     mut error_event: EventWriter<SurfaceErrorEvent>,
-    buffer_q: Query<&Buffer>,
-    render_pipeline_q: Query<&RenderPipeline>,
-    material_q: Query<&Material>,
-    mesh_q: Query<&Mesh>,
-    bind_group_q: Query<&BindGroup>,
 ) {
-    let output = match renderer.surface.get_current_texture() {
+    let texture = match renderer.surface.get_current_texture() {
         Ok(o) => o,
         Err(e) => {
             error_event.send(SurfaceErrorEvent(e));
             return;
         }
     };
-    let view = output.texture.create_view(&TextureViewDescriptor {
+    let view = Box::new(texture.texture.create_view(&TextureViewDescriptor {
         label: Some("Create surface texture view"),
         ..Default::default()
-    });
-    let mut encoder = renderer
-        .device
-        .create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Create command encoder"),
-        });
+    }));
+    let mut encoder = Box::new(
+        renderer
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Create command encoder"),
+            }),
+    );
 
-    let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-        label: Some("Begin render pass"),
-        color_attachments: &[Some(RenderPassColorAttachment {
-            view: &view,
-            resolve_target: None,
-            ops: Operations {
-                load: match clear_color {
-                    Some(clear_color) => LoadOp::Clear(clear_color.0),
-                    None => LoadOp::Load,
-                },
-                store: StoreOp::Store,
+    // SAFETY: Getting static lifetimed reference from Boxed value.
+    // WARNING: SURFACE MUST BE DROPPED BEFORE ANY OF THE BOXED TYPES DO
+    let render_pass = unsafe {
+        transmute::<_, &'static mut CommandEncoder>(&mut *encoder).begin_render_pass(
+            &RenderPassDescriptor {
+                label: Some("Begin render pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: transmute(&*view),
+                    resolve_target: None,
+                    ops: Operations {
+                        load: match clear_color {
+                            Some(clear_color) => LoadOp::Clear(clear_color.0),
+                            None => LoadOp::Load,
+                        },
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                    view: &renderer.depth_view,
+                    depth_ops: Some(Operations {
+                        load: LoadOp::Clear(1.0),
+                        store: StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
             },
-        })],
-        ..Default::default()
+        )
+    };
+
+    renderer.render_pass = Some(RenderPassContainer {
+        texture,
+        view,
+        encoder,
+        render_pass,
     });
+}
+fn render_end(mut renderer: ResMut<Renderer>) {
+    let Some(RenderPassContainer {
+        encoder,
+        texture,
+        render_pass,
+        view,
+    }) = renderer.render_pass.take()
+    else {
+        return;
+    };
 
-    for mesh in mesh_q.iter() {
-        let material = material_q.get(mesh.material).unwrap();
-        let pipeline = render_pipeline_q.get(material.pipeline).unwrap();
+    drop(render_pass); // NOTE: MUST BE DROPPED FIRST!
 
-        render_pass.set_pipeline(pipeline);
+    let cmd_buf = encoder.finish();
+    renderer.queue.submit(std::iter::once(cmd_buf));
 
-        for (&slot, &entity) in mesh.vertex_buffers.iter() {
-            let buffer = buffer_q.get(entity).unwrap();
-            render_pass.set_vertex_buffer(slot as u32, buffer.slice(..));
-        }
-        for (&index, &entity) in material.bind_groups.iter() {
-            let group = bind_group_q.get(entity).unwrap();
-            render_pass.set_bind_group(index as u32, group, &[]);
-        }
-
-        if let Some(entity) = mesh.index_buffer {
-            let buffer = buffer_q.get(entity).unwrap();
-            render_pass.set_index_buffer(buffer.slice(..), IndexFormat::Uint32);
-            render_pass.draw_indexed(mesh.vertex_range.clone(), 0, mesh.instance_range.clone());
-        } else {
-            render_pass.draw(mesh.vertex_range.clone(), mesh.instance_range.clone());
-        }
-    }
-
-    drop(render_pass);
-
-    let command_buffer = encoder.finish();
-
-    renderer.queue.submit(std::iter::once(command_buffer));
-    output.present();
+    texture.present();
+    drop(view); // when i leave 'view' out of the unpacking, rust seems to drop it before render_pass, so i need to explicitly declare where to drop.
 }
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RendererSystem {
+    RenderBegin,
+    RenderEnd,
+    OnResize,
+    HandleSurfaceError,
+}
 pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Events<SurfaceErrorEvent>>();
-        app.add_systems(Update, on_resize);
+        app.add_systems(Update, on_resize.in_set(RendererSystem::OnResize));
         app.add_systems(
             PostUpdate,
             (
-                render
-                    .after(TransformSystem::TransformPropagate)
-                    .run_if(contains_resource::<Renderer>),
-                handle_surface_error.after(render),
+                render_begin
+                    .run_if(contains_resource::<Renderer>)
+                    .in_set(RendererSystem::RenderBegin),
+                handle_surface_error
+                    .after(render_begin)
+                    .in_set(RendererSystem::HandleSurfaceError),
+                render_end
+                    .after(handle_surface_error)
+                    .run_if(contains_resource::<Renderer>)
+                    .in_set(RendererSystem::RenderEnd),
             ),
         );
     }
