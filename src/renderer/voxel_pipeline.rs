@@ -1,14 +1,13 @@
 use bevy::math::*;
 use bevy::prelude::*;
 use std::mem::{size_of, MaybeUninit};
-use std::num::NonZeroU64;
+use std::num::NonZero;
 use std::ops::{Index, IndexMut};
 use wgpu::util::*;
 use wgpu::*;
 
 use crate::*;
 
-use super::camera::*;
 use super::model::*;
 use super::renderer::*;
 
@@ -96,10 +95,6 @@ impl FromWorld for VoxelPipeline {
     fn from_world(world: &mut World) -> Self {
         let renderer = world.resource::<Renderer>();
 
-        let camera_layout = &**world.resource::<CameraBindLayout>();
-        let model_layout = &**world.resource::<ModelBindLayout>();
-        let voxel_layout = &**world.resource::<VoxelBindLayout>();
-
         let shader_module = renderer
             .device
             .create_shader_module(include_wgsl!("voxel_shader.wgsl"));
@@ -107,7 +102,11 @@ impl FromWorld for VoxelPipeline {
             .device
             .create_pipeline_layout(&PipelineLayoutDescriptor {
                 label: Some("Voxel pipeline layout"),
-                bind_group_layouts: &[camera_layout, model_layout, voxel_layout],
+                bind_group_layouts: &[
+                    &**world.resource::<TransformBindLayout>(),
+                    &**world.resource::<VoxelColorBindLayout>(),
+                    &**world.resource::<VoxelBindLayout>(),
+                ],
                 push_constant_ranges: &[],
             });
         Self(
@@ -159,9 +158,26 @@ impl FromWorld for VoxelPipeline {
     }
 }
 
-#[derive(Component)]
-pub struct ColorPalette([[u8; 4]; 256]);
-impl ColorPalette {
+#[derive(Resource, Deref)]
+pub struct MainVoxelColors(Entity);
+impl FromWorld for MainVoxelColors {
+    fn from_world(world: &mut World) -> Self {
+        let renderer = world.resource::<Renderer>();
+        let layout = world.resource::<VoxelColorBindLayout>();
+
+        let palette = world
+            .spawn((
+                VoxelColors::all_color(),
+                VoxelColorBuffer::new(renderer, layout),
+            ))
+            .id();
+        Self(palette)
+    }
+}
+
+#[derive(Component, Deref, Clone, Copy)]
+pub struct VoxelColors([[u8; 4]; 256]);
+impl VoxelColors {
     // Color palette that contains every color of RGBA channels where each channel has 2bits
     pub fn all_color() -> Self {
         #[allow(invalid_value)]
@@ -173,6 +189,69 @@ impl ColorPalette {
             color[3] = (i as u8 >> 6 & 0b11) * 85;
         }
         itself
+    }
+}
+
+#[derive(Resource, Deref)]
+pub struct VoxelColorBindLayout(BindGroupLayout);
+impl VoxelColorBindLayout {
+    fn new(renderer: &Renderer) -> Self {
+        Self(
+            renderer
+                .device
+                .create_bind_group_layout(&BindGroupLayoutDescriptor {
+                    label: Some("Voxel color bind group layout"),
+                    entries: &[BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                }),
+        )
+    }
+}
+impl FromWorld for VoxelColorBindLayout {
+    fn from_world(world: &mut World) -> Self {
+        Self::new(world.resource())
+    }
+}
+#[derive(Component)]
+pub struct VoxelColorBuffer {
+    buffer: Buffer,
+    group: BindGroup,
+}
+impl VoxelColorBuffer {
+    pub fn new(renderer: &Renderer, layout: &VoxelColorBindLayout) -> Self {
+        let buffer = renderer.device.create_buffer(&BufferDescriptor {
+            label: Some("Voxel color buffer"),
+            size: size_of::<[[u8; 4]; 256]>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = renderer.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Voxel color bind group"),
+            layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(BufferBinding {
+                    buffer: &buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+
+        Self { buffer, group }
+    }
+    pub fn update(&self, renderer: &Renderer, color: &VoxelColors) {
+        renderer
+            .queue
+            .write_buffer(&self.buffer, 0, bytemuck::bytes_of(&**color));
     }
 }
 
@@ -203,19 +282,9 @@ impl VoxelBuffer {
             }],
         });
 
-        let mut view = renderer
+        renderer
             .queue
-            .write_buffer_with(
-                &buffer,
-                0,
-                NonZeroU64::new(size_of::<UVec3>() as u64).unwrap(),
-            )
-            .unwrap();
-
-        view.as_mut()
-            .clone_from_slice(bytemuck::bytes_of(&dimension));
-
-        drop(view);
+            .write_buffer(&buffer, 0, bytemuck::bytes_of(&dimension));
 
         Self {
             buffer,
@@ -224,22 +293,12 @@ impl VoxelBuffer {
         }
     }
     pub fn update(&self, renderer: &Renderer, voxel: &Voxel) {
-        if voxel.dimension() != self.dimension {
-            panic!("Attempted to update buffer with voxel whose dimension does not match.");
+        if self.dimension != voxel.dimension() {
+            panic!("Cannot update buffer with voxel whose dimension does not match the buffer's dimension. Resize the buffer with the matching dimension and then update.");
         }
-
-        let mut view = renderer
+        renderer
             .queue
-            .write_buffer_with(
-                &self.buffer,
-                0,
-                NonZeroU64::new((size_of::<UVec4>() + voxel.len()) as u64).unwrap(),
-            )
-            .unwrap();
-
-        let start = size_of::<UVec4>(); // due to buffer alignment
-        let end = start + voxel.len();
-        view[start..end].clone_from_slice(&voxel.data);
+            .write_buffer(&self.buffer, size_of::<UVec4>() as u64, &voxel.data);
     }
 }
 #[derive(Component, Clone)]
@@ -315,36 +374,47 @@ impl IndexMut<[usize; 3]> for Voxel {
 fn draw(
     mut renderer: ResMut<Renderer>,
     pipeline: Res<VoxelPipeline>,
-    main_camera: Res<MainCamera>,
+    main_color: Res<MainVoxelColors>,
     vertex_buffer: Res<VoxelVertexBuffer>,
     index_buffer: Res<VoxelIndexBuffer>,
-    camera_q: Query<&CameraBuffer>,
-    voxel_q: Query<(&VoxelBuffer, &ModelBuffer)>,
+    voxel_q: Query<(&VoxelBuffer, &TransformBuffer)>,
+    color_q: Query<&VoxelColorBuffer>,
 ) {
     let Some(RenderPassContainer { render_pass, .. }) = &mut renderer.render_pass else {
         return;
     };
 
-    if let Ok(camera) = camera_q.get(**main_camera) {
-        render_pass.set_bind_group(0, &camera.group, &[]);
-    }
-
     render_pass.set_pipeline(&pipeline);
 
-    for (voxel, model) in voxel_q.iter() {
-        render_pass.set_bind_group(1, &model.group, &[]);
+    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+    render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+
+    let color = color_q
+        .get(**main_color)
+        .expect("Voxel color buffer not found!");
+    render_pass.set_bind_group(1, &color.group, &[]);
+
+    for (voxel, transform) in voxel_q.iter() {
+        render_pass.set_bind_group(0, &transform.group, &[]);
         render_pass.set_bind_group(2, &voxel.group, &[]);
-        render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        render_pass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+
         render_pass.draw_indexed(0..(INDICES.len() as u32), 0, 0..1);
     }
 }
-fn sync_buffers(renderer: Res<Renderer>, voxel_q: Query<(Ref<Voxel>, &VoxelBuffer)>) {
+fn sync_voxel_buffers(
+    renderer: Res<Renderer>,
+    voxel_q: Query<(&Voxel, &VoxelBuffer), Changed<Voxel>>,
+) {
     for (voxel, buffer) in voxel_q.iter() {
-        if !voxel.is_changed() {
-            continue;
-        }
-        buffer.update(&renderer, &voxel);
+        buffer.update(&renderer, voxel);
+    }
+}
+fn sync_color_buffers(
+    renderer: Res<Renderer>,
+    color_q: Query<(&VoxelColors, &VoxelColorBuffer), Changed<VoxelColors>>,
+) {
+    for (color, buffer) in color_q.iter() {
+        buffer.update(&renderer, color);
     }
 }
 
@@ -354,15 +424,17 @@ impl Plugin for VoxelPlugin {
         app.add_systems(
             PostUpdate,
             (
-                sync_buffers.before(RendererSystem::RenderBegin),
+                (sync_color_buffers, sync_voxel_buffers).before(RendererSystem::RenderBegin),
                 draw.after(RendererSystem::RenderBegin)
                     .before(RendererSystem::RenderEnd),
             )
                 .run_if(contains_resource::<Renderer>),
         );
-    }
-    fn finish(&self, app: &mut App) {
+
         app.init_resource::<VoxelBindLayout>();
+        app.init_resource::<VoxelColorBindLayout>();
+        app.init_resource::<MainVoxelColors>();
+
         app.init_resource::<VoxelPipeline>();
         app.init_resource::<VoxelVertexBuffer>();
         app.init_resource::<VoxelIndexBuffer>();
@@ -373,14 +445,14 @@ impl Plugin for VoxelPlugin {
 pub struct VoxelBundle {
     pub voxel: Voxel,
     pub voxel_buffer: VoxelBuffer,
-    pub model_buffer: ModelBuffer,
+    pub model_buffer: TransformBuffer,
     pub transform: TransformBundle,
 }
 impl VoxelBundle {
     pub fn new(
         renderer: &Renderer,
         voxel_layout: &VoxelBindLayout,
-        model_layout: &ModelBindLayout,
+        transform_layout: &TransformBindLayout,
         dimension: UVec3,
     ) -> Self {
         Self {
@@ -390,7 +462,7 @@ impl VoxelBundle {
                 dimension.z as usize,
             ),
             voxel_buffer: VoxelBuffer::new(renderer, voxel_layout, dimension),
-            model_buffer: ModelBuffer::new(renderer, model_layout),
+            model_buffer: TransformBuffer::new(renderer, transform_layout),
             transform: TransformBundle::IDENTITY,
         }
     }

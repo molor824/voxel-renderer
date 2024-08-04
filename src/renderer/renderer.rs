@@ -1,15 +1,13 @@
-use std::mem::transmute;
-
 use crate::*;
 use bevy::app::AppExit;
-use bevy::window::{PrimaryWindow, RawHandleWrapper, WindowResized};
+use bevy::window::{PrimaryWindow, RawHandleWrapper};
 use wgpu::*;
 
 pub struct RenderPassContainer {
     pub texture: SurfaceTexture,
     pub render_pass: RenderPass<'static>,
-    pub view: Box<TextureView>,
-    pub encoder: Box<CommandEncoder>,
+    pub view: TextureView,
+    pub encoder: CommandEncoder,
 }
 #[derive(Resource)]
 pub struct Renderer {
@@ -167,47 +165,43 @@ fn render_begin(
             return;
         }
     };
-    let view = Box::new(texture.texture.create_view(&TextureViewDescriptor {
+    let view = texture.texture.create_view(&TextureViewDescriptor {
         label: Some("Create surface texture view"),
         ..Default::default()
-    }));
-    let mut encoder = Box::new(
-        renderer
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Create command encoder"),
-            }),
-    );
+    });
+    let mut encoder = renderer
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Create command encoder"),
+        });
 
     // SAFETY: Getting static lifetimed reference from Boxed value.
     // WARNING: SURFACE MUST BE DROPPED BEFORE ANY OF THE BOXED TYPES DO
-    let render_pass = unsafe {
-        transmute::<_, &'static mut CommandEncoder>(&mut *encoder).begin_render_pass(
-            &RenderPassDescriptor {
-                label: Some("Begin render pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: transmute(&*view),
-                    resolve_target: None,
-                    ops: Operations {
-                        load: match clear_color {
-                            Some(clear_color) => LoadOp::Clear(clear_color.0),
-                            None => LoadOp::Load,
-                        },
-                        store: StoreOp::Store,
+    let render_pass = encoder
+        .begin_render_pass(&RenderPassDescriptor {
+            label: Some("Begin render pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: Operations {
+                    load: match clear_color {
+                        Some(clear_color) => LoadOp::Clear(clear_color.0),
+                        None => LoadOp::Load,
                     },
-                })],
-                depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
-                    view: &renderer.depth_view,
-                    depth_ops: Some(Operations {
-                        load: LoadOp::Clear(1.0),
-                        store: StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(RenderPassDepthStencilAttachment {
+                view: &renderer.depth_view,
+                depth_ops: Some(Operations {
+                    load: LoadOp::Clear(1.0),
+                    store: StoreOp::Store,
                 }),
-                ..Default::default()
-            },
-        )
-    };
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        })
+        .forget_lifetime();
 
     renderer.render_pass = Some(RenderPassContainer {
         texture,
@@ -246,7 +240,6 @@ pub enum RendererSystem {
 pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Events<SurfaceErrorEvent>>();
         app.add_systems(Update, on_resize.in_set(RendererSystem::OnResize));
         app.add_systems(
             PostUpdate,
@@ -263,8 +256,7 @@ impl Plugin for RenderPlugin {
                     .in_set(RendererSystem::RenderEnd),
             ),
         );
-    }
-    fn finish(&self, app: &mut App) {
+        app.init_resource::<Events<SurfaceErrorEvent>>();
         app.init_resource::<Renderer>();
     }
 }
