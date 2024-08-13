@@ -5,9 +5,10 @@ use bevy::window::*;
 use camera::*;
 use model::*;
 use renderer::*;
-use voxel_pipeline::*;
+use voxel::*;
 
 mod renderer;
+mod voxel;
 
 fn contains_resource<T: Resource>(resource: Option<Res<T>>) -> bool {
     resource.is_some()
@@ -16,8 +17,7 @@ fn contains_resource<T: Resource>(resource: Option<Res<T>>) -> bool {
 fn setup(
     mut commands: Commands,
     renderer: Res<Renderer>,
-    voxel_layout: Res<VoxelBindLayout>,
-    transform_layout: Res<TransformBindLayout>,
+    voxel_pipeline: Res<voxel::Pipeline>,
     main_camera: Res<MainCamera>,
     mut camera_q: Query<&mut Transform>,
 ) {
@@ -26,14 +26,36 @@ fn setup(
     camera.translation.z += 2.0;
     camera.translation.y += 1.0;
     camera.look_at(Vec3::ZERO, Vec3::Y);
-    
-    commands.spawn(VoxelBundle::new(&renderer, &voxel_layout, &transform_layout, uvec3(32, 32, 32)));
+
+    commands.spawn(VoxelBundle::new(
+        UVec3::splat(16),
+        &renderer,
+        &voxel_pipeline,
+    ));
+}
+fn set_voxel(mut voxel_q: Query<&mut Voxel>) {
+    let Some(mut voxel) = voxel_q.iter_mut().next() else {
+        return;
+    };
+    let center = voxel.dimension().as_vec3() * 0.5;
+    let radius = 6.0;
+    voxel.for_each_mut(|v, position| {
+        let position = position.as_vec3();
+        *v = if (center - position).length() < radius {
+            0xff
+        } else {
+            0x0
+        };
+    });
 }
 fn rotate_camera(mut camera_q: Query<&mut Transform, With<Camera>>, time: Res<Time>) {
     let delta = time.delta_seconds();
     let mut transform = camera_q.single_mut();
 
-    transform.rotate_around(Vec3::ZERO, Quat::from_rotation_y(45.0_f32.to_radians() * delta));
+    transform.rotate_around(
+        Vec3::ZERO,
+        Quat::from_rotation_y(45.0_f32.to_radians() * delta),
+    );
 }
 
 fn main() {
@@ -48,15 +70,9 @@ fn main() {
         ..Default::default()
     };
     App::new()
-        .add_plugins((
-            DefaultPlugins.set(window_plugin),
-            RenderPlugin,
-            ModelPlugin,
-            CameraPlugin,
-            VoxelPlugin,
-        ))
+        .add_plugins((DefaultPlugins.set(window_plugin), RenderPlugin, VoxelPlugin))
         .insert_resource(ClearColor(wgpu::Color::BLACK))
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, set_voxel.after(setup)))
         .add_systems(Update, rotate_camera)
         .run();
 }

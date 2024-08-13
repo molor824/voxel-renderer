@@ -11,15 +11,15 @@ pub struct RenderPassContainer {
 }
 #[derive(Resource)]
 pub struct Renderer {
-    pub(super) instance: Instance,
-    pub(super) surface: Surface<'static>,
-    pub(super) adapter: Adapter,
-    pub(super) config: SurfaceConfiguration,
-    pub(super) device: Device,
-    pub(super) queue: Queue,
-    pub(super) render_pass: Option<RenderPassContainer>,
-    pub(super) depth_texture: Texture,
-    pub(super) depth_view: TextureView,
+    pub instance: Instance,
+    pub surface: Surface<'static>,
+    pub adapter: Adapter,
+    pub config: SurfaceConfiguration,
+    pub device: Device,
+    pub queue: Queue,
+    pub render_pass: Option<RenderPassContainer>,
+    pub depth_texture: Texture,
+    pub depth_view: TextureView,
 }
 impl Renderer {
     fn resize(&mut self, width: u32, height: u32) {
@@ -91,7 +91,7 @@ impl FromWorld for Renderer {
         let (device, queue) = pollster::block_on(adapter.request_device(
             &DeviceDescriptor {
                 label: Some("Request device"),
-                required_features: Features::MAPPABLE_PRIMARY_BUFFERS,
+                required_features: Features::SPIRV_SHADER_PASSTHROUGH,
                 required_limits: Limits::downlevel_defaults(),
                 memory_hints: MemoryHints::Performance,
             },
@@ -231,32 +231,34 @@ fn render_end(mut renderer: ResMut<Renderer>) {
 }
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RendererSystem {
-    RenderBegin,
-    RenderEnd,
+pub enum RenderSystem {
+    Begin,
+    End,
     OnResize,
     HandleSurfaceError,
 }
 pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, on_resize.in_set(RendererSystem::OnResize));
+        app.add_systems(Update, on_resize.in_set(RenderSystem::OnResize));
         app.add_systems(
             PostUpdate,
             (
                 render_begin
                     .run_if(contains_resource::<Renderer>)
-                    .in_set(RendererSystem::RenderBegin),
+                    .in_set(RenderSystem::Begin),
                 handle_surface_error
                     .after(render_begin)
-                    .in_set(RendererSystem::HandleSurfaceError),
+                    .in_set(RenderSystem::HandleSurfaceError),
                 render_end
                     .after(handle_surface_error)
                     .run_if(contains_resource::<Renderer>)
-                    .in_set(RendererSystem::RenderEnd),
+                    .in_set(RenderSystem::End),
             ),
         );
         app.init_resource::<Events<SurfaceErrorEvent>>();
         app.init_resource::<Renderer>();
+
+        app.add_plugins((CameraPlugin, ModelPlugin));
     }
 }
