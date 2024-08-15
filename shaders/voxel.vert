@@ -13,7 +13,7 @@ const vec3 VERTICES[8] = {
 const uint INDICES[14] = {1, 2, 0, 3, 7, 2, 6, 1, 5, 0, 4, 7, 5, 6};
 
 layout(location = 0) out vec3 o_point;
-layout(location = 1) out vec3 o_direction;
+layout(location = 1) flat out vec3 o_camera_pos;
 layout(location = 2) flat out uint o_iterations;
 
 layout(set = 0, binding = 0) uniform Model {
@@ -33,9 +33,11 @@ layout(set = 1, binding = 0) uniform Camera {
 void main() {
     vec3 vertex = VERTICES[INDICES[gl_VertexIndex]];
 
-    gl_Position = camera.projection * camera.inv_transform * model.transform * vec4(vertex, 1);
-    vec3 camera_pos = (model.inv_transform * camera.transform[3]).xyz;
-    o_point = vertex * vec3(voxel.dimension);
-    o_direction = normalize(vertex - camera_pos);
+    vec4 point = camera.inv_transform * model.transform * vec4(vertex, 1.0);
+    vec4 camera_pos = model.inv_transform * camera.transform[3];
+    o_camera_pos = camera_pos.xyz / camera_pos.w;
+    o_point = point.xyz / point.w;
+    gl_Position = camera.projection * point;
+    
     o_iterations = max(voxel.dimension.x, max(voxel.dimension.y, voxel.dimension.z)) * 8;
 }
