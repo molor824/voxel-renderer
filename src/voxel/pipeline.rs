@@ -39,7 +39,7 @@ impl FromWorld for Pipeline {
                 .create_bind_group_layout(&BindGroupLayoutDescriptor {
                     label: Some("Voxel per instance bind group layout"),
                     entries: &[
-                        create_entry(0, BufferBindingType::Uniform, ShaderStages::VERTEX_FRAGMENT),
+                        create_entry(0, BufferBindingType::Uniform, ShaderStages::VERTEX),
                         create_entry(
                             1,
                             BufferBindingType::Storage { read_only: true },
@@ -55,7 +55,7 @@ impl FromWorld for Pipeline {
                 .create_bind_group_layout(&BindGroupLayoutDescriptor {
                     label: Some("Voxel per render bind group layout"),
                     entries: &[
-                        create_entry(0, BufferBindingType::Uniform, ShaderStages::VERTEX_FRAGMENT),
+                        create_entry(0, BufferBindingType::Uniform, ShaderStages::VERTEX),
                         create_entry(1, BufferBindingType::Uniform, ShaderStages::FRAGMENT),
                     ],
                 });

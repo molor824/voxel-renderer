@@ -38,14 +38,18 @@ impl VoxelBuffer {
 #[derive(Component, Clone)]
 pub struct Voxel {
     dimension: UVec3,
-    data: Box<[u8]>,
+    data: Box<[u32]>,
 }
 impl Voxel {
     pub fn new(dimension: UVec3) -> Self {
         let UVec3 { x, y, z } = dimension;
+        assert!(
+            x % 2 == 0 && y % 2 == 0 && z % 2 == 0,
+            "dimension fields must be divisable by 2!"
+        );
         Self {
             dimension,
-            data: vec![0; x as usize * y as usize * z as usize].into_boxed_slice(),
+            data: vec![0; x as usize * y as usize * z as usize / 4].into_boxed_slice(),
         }
     }
     pub const fn len(&self) -> usize {
@@ -83,16 +87,25 @@ impl Voxel {
     }
     pub fn for_each_mut(&mut self, mut callback: impl FnMut(&mut u8, UVec3)) {
         let dimension = self.dimension;
-        for (i, v) in self.data.iter_mut().enumerate() {
-            let position = Self::get_position(dimension, i).unwrap();
-            callback(v, position);
+        for z in 0..dimension.z {
+            for y in 0..dimension.y {
+                for x in 0..dimension.x {
+                    let position = uvec3(x, y, z);
+                    let v = self.get_mut(position).unwrap();
+                    callback(v, position);
+                }
+            }
         }
     }
     pub fn get(&self, position: UVec3) -> Option<&u8> {
-        unsafe { Self::get_index(self.dimension, position).map(|i| self.data.get_unchecked(i)) }
+        Self::get_index(self.dimension, position).map(|i| unsafe {
+            &std::mem::transmute::<_, &[u8; 4]>(self.data.get_unchecked(i / 4))[i % 4]
+        })
     }
     pub fn get_mut(&mut self, position: UVec3) -> Option<&mut u8> {
-        unsafe { Self::get_index(self.dimension, position).map(|i| self.data.get_unchecked_mut(i)) }
+        Self::get_index(self.dimension, position).map(|i| unsafe {
+            &mut std::mem::transmute::<_, &mut [u8; 4]>(self.data.get_unchecked_mut(i / 4))[i % 4]
+        })
     }
 }
 

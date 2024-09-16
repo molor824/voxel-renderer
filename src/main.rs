@@ -38,10 +38,10 @@ fn set_voxel(mut voxel_q: Query<&mut Voxel>) {
         return;
     };
     let center = voxel.dimension().as_vec3() * 0.5;
-    let radius = 6.0;
+    let radius = 8.0;
     voxel.for_each_mut(|v, position| {
-        let position = position.as_vec3();
-        *v = if (center - position).length() < radius {
+        let pos = position.as_vec3() + Vec3::splat(0.5);
+        *v = if pos.distance_squared(center) <= radius * radius {
             0xff
         } else {
             0x0
