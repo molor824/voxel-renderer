@@ -102,16 +102,21 @@ fn sync_main_buffer(
     buffer: Res<MainCameraBuffer>,
     main_camera: Res<MainCamera>,
     camera_q: Query<(Ref<Camera>, Ref<GlobalTransform>)>,
-    window_q: Query<&Window>,
+    window_q: Query<Ref<Window>>,
 ) {
     let Ok((camera, transform)) = camera_q.get(**main_camera) else {
         return;
     };
-    if !camera.is_changed() && !transform.is_changed() && !main_camera.is_changed() {
+    let window = window_q.single();
+
+    if !camera.is_changed()
+        && !transform.is_changed()
+        && !main_camera.is_changed()
+        && !window.is_changed()
+    {
         return;
     }
 
-    let window = window_q.single();
     let aspect = window.width() / window.height();
 
     let transform_matrix = transform.compute_matrix();
@@ -149,6 +154,11 @@ impl Plugin for CameraPlugin {
         app.init_resource::<MainCameraBuffer>();
         app.init_resource::<MainCamera>();
 
-        app.add_systems(PostUpdate, sync_main_buffer.run_if(contains_resource::<Renderer>).before(RenderSystem::Begin));
+        app.add_systems(
+            PostUpdate,
+            sync_main_buffer
+                .run_if(contains_resource::<Renderer>)
+                .before(RenderSystem::Begin),
+        );
     }
 }
