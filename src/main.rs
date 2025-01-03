@@ -28,7 +28,7 @@ fn setup(
     camera.look_at(Vec3::ZERO, Vec3::Y);
 
     commands.spawn(VoxelBundle::new(
-        UVec3::splat(16),
+        UVec3::splat(32),
         &renderer,
         &voxel_pipeline,
     ));
@@ -37,15 +37,11 @@ fn set_voxel(mut voxel_q: Query<&mut Voxel>) {
     let Some(mut voxel) = voxel_q.iter_mut().next() else {
         return;
     };
-    let center = voxel.dimension().as_vec3() * 0.5;
-    let radius = 8.0;
     voxel.for_each_mut(|v, position| {
-        let pos = position.as_vec3() + Vec3::splat(0.5);
-        *v = if pos.distance_squared(center) <= radius * radius {
-            0xff
-        } else {
-            0x0
-        };
+        *v = position.x as u8 + position.y as u8 + position.z as u8;
+        if *v != 0 {
+            *v |= 0b1100_0000;
+        }
     });
 }
 fn rotate_camera(mut camera_q: Query<&mut Transform, With<Camera>>, time: Res<Time>) {
