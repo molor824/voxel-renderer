@@ -35,6 +35,6 @@ void main() {
     vec4 camera_pos = model.inv_transform * camera.transform[3];
     o_camera_pos = camera_pos.xyz / camera_pos.w;
     o_point = vertex;
-    o_iterations = max(voxel.dimension.x, max(voxel.dimension.y, voxel.dimension.z)) * 8;
+    o_iterations = voxel.dimension.x + voxel.dimension.y + voxel.dimension.z;
     gl_Position = camera.projection * camera.inv_transform * model.transform * vec4(vertex, 1.0);
 }

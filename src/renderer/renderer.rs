@@ -55,7 +55,7 @@ impl Renderer {
 impl FromWorld for Renderer {
     fn from_world(world: &mut World) -> Self {
         let instance = Instance::new(InstanceDescriptor {
-            backends: Backends::all(),
+            backends: Backends::VULKAN,
             flags: if cfg!(debug_assertions) {
                 InstanceFlags::debugging()
             } else {
@@ -84,9 +84,11 @@ impl FromWorld for Renderer {
         }))
         .expect("No suitable adapters found.");
 
-        let config = surface
+        let mut config = surface
             .get_default_config(&adapter, window.physical_width(), window.physical_height())
             .expect("The surface is not supported by this adapter.");
+
+        config.present_mode = wgpu::PresentMode::Fifo;
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &DeviceDescriptor {

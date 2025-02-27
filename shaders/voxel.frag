@@ -64,12 +64,14 @@ vec4 unpack_color(uint packed) {
 }
 
 const float THRESHOLD = 0.0001;
+const vec3 LIGHT_DIR = normalize(vec3(-3.0, -10.0, -5.0));
 
 void main() {
     vec3 point = i_point * vec3(voxel.dimension);
     vec3 direction = normalize(i_point - i_camera_pos);
     vec4 color = vec4(0.0);
     vec3 normal = vec3(0.0);
+    vec3 hit_point = vec3(0.0) / 0.0;
 
     point -= direction * THRESHOLD;
 
@@ -79,10 +81,14 @@ void main() {
         if (color.w == 0) {
             color = hit_color;
             normal = info.normal;
+            hit_point = point;
         }
         point = info.intersection + direction * THRESHOLD;
     }
 
     frag_color = color;
     frag_normal = normal;
+
+    float light_dot = (dot(normal, -LIGHT_DIR) + 1) * 0.5;
+    frag_color = color * light_dot;
 }

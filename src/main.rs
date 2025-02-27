@@ -17,7 +17,7 @@ fn contains_resource<T: Resource>(resource: Option<Res<T>>) -> bool {
 fn setup(
     mut commands: Commands,
     renderer: Res<Renderer>,
-    voxel_pipeline: Res<voxel::Pipeline>,
+    voxel_pipeline: Res<Pipeline>,
     main_camera: Res<MainCamera>,
     mut camera_q: Query<&mut Transform>,
 ) {
@@ -25,10 +25,11 @@ fn setup(
 
     camera.translation.z += 2.0;
     camera.translation.y += 1.0;
+    camera.translation *= 0.5;
     camera.look_at(Vec3::ZERO, Vec3::Y);
 
     commands.spawn(VoxelBundle::new(
-        UVec3::splat(32),
+        UVec3::splat(64),
         &renderer,
         &voxel_pipeline,
     ));
@@ -38,10 +39,16 @@ fn set_voxel(mut voxel_q: Query<&mut Voxel>) {
         return;
     };
     voxel.for_each_mut(|v, position| {
-        *v = position.x as u8 + position.y as u8 + position.z as u8;
-        if *v != 0 {
-            *v |= 0b1100_0000;
-        }
+        let scaled_position = position.as_vec3() * (16.0 / 64.0);
+        let height = (scaled_position.x.cos() + scaled_position.z.sin()) + 7.0;
+        let scaled_position1 = scaled_position / 3.0;
+        *v = if scaled_position.y > (height + (
+            scaled_position1.x.cos() + scaled_position1.z.cos() + scaled_position1.y.sin()
+        ) * 2.0) {
+            0x0
+        } else {
+            0b11000100
+        };
     });
 }
 fn rotate_camera(mut camera_q: Query<&mut Transform, With<Camera>>, time: Res<Time>) {
@@ -60,7 +67,6 @@ fn main() {
             focused: true,
             title: "Voxel renderer".into(),
             resolution: WindowResolution::new(800.0, 600.0),
-            present_mode: PresentMode::AutoVsync,
             ..Default::default()
         }),
         ..Default::default()

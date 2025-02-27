@@ -107,7 +107,9 @@ fn sync_main_buffer(
     let Ok((camera, transform)) = camera_q.get(**main_camera) else {
         return;
     };
-    let window = window_q.single();
+    let Ok(window) = window_q.get_single() else {
+        return;
+    };
 
     if !camera.is_changed()
         && !transform.is_changed()
