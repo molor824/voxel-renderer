@@ -100,10 +100,9 @@ impl FromWorld for Pipeline {
                     })],
                 }),
                 primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleStrip,
-                    strip_index_format: Some(IndexFormat::Uint32),
+                    topology: PrimitiveTopology::TriangleList,
                     front_face: FrontFace::Ccw,
-                    cull_mode: Some(Face::Back),
+                    cull_mode: None,
                     polygon_mode: PolygonMode::Fill,
                     ..Default::default()
                 },
@@ -203,6 +202,6 @@ pub(super) fn draw(
     for per_instance in per_instance_q.iter() {
         render_pass.set_bind_group(0, &*per_instance, &[]);
 
-        render_pass.draw(0..14, 0..1);
+        render_pass.draw(0..36, 0..1);
     }
 }
