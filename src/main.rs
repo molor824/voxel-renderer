@@ -1,4 +1,3 @@
-use std::f32::consts::PI;
 use bevy::ecs::query::*;
 use bevy::input::mouse::MouseMotion;
 use bevy::math::*;
@@ -7,6 +6,7 @@ use bevy::window::*;
 use camera::*;
 use model::*;
 use renderer::*;
+use std::f32::consts::PI;
 use voxel::*;
 
 mod renderer;
@@ -22,7 +22,7 @@ fn setup(
     voxel_pipeline: Res<Pipeline>,
     main_camera: Res<MainCamera>,
     mut camera_q: Query<&mut Transform>,
-    mut window_q: Query<&mut Window, With<PrimaryWindow>>
+    mut window_q: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     let mut camera = camera_q.get_mut(**main_camera).unwrap();
 
@@ -46,26 +46,39 @@ fn set_voxel(mut voxel_q: Query<&mut Voxel>) {
     let Some(mut voxel) = voxel_q.iter_mut().next() else {
         return;
     };
+    let water_level = 10.0;
     voxel.for_each_mut(|v, position| {
         let scaled_position = position.as_vec3() * (16.0 / 64.0);
-        let height = (scaled_position.x.cos() + scaled_position.z.sin()) + 7.0;
         let scaled_position1 = scaled_position / 3.0;
-        *v = if scaled_position.y > (height + (
-            scaled_position1.x.cos() + scaled_position1.z.cos() + scaled_position1.y.sin()
-        ) * 2.0) {
-            0x0
+        let height = (scaled_position.x.cos() + scaled_position.z.sin()) * 2.0
+            + 7.0
+            + (scaled_position1.x.cos() + scaled_position1.z.cos() + scaled_position1.y.sin())
+                * 2.0;
+        *v = if position.y as f32 > height {
+            if (position.y as f32) < water_level {
+                0x0
+            } else {
+                0x0
+            }
         } else {
             0b11000100
         };
     });
 }
-fn camera_movement(mut camera_q: Query<&mut Transform, With<Camera>>, time: Res<Time>, input: Res<ButtonInput<KeyCode>>, mut mouse_motion: EventReader<MouseMotion>) {
+fn camera_movement(
+    mut camera_q: Query<&mut Transform, With<Camera>>,
+    time: Res<Time>,
+    input: Res<ButtonInput<KeyCode>>,
+    mut mouse_motion: EventReader<MouseMotion>,
+) {
     const SENSITIVITY: f32 = 0.01;
     const SPEED: f32 = 1.0;
 
     let delta = time.delta_seconds();
     let mut camera = camera_q.single_mut();
-    let mouse_delta = mouse_motion.read().fold(Vec2::ZERO, |acc, motion| acc + motion.delta);
+    let mouse_delta = mouse_motion
+        .read()
+        .fold(Vec2::ZERO, |acc, motion| acc + motion.delta);
 
     let mut euler = camera.rotation.to_euler(EulerRot::YXZ);
     euler.0 -= mouse_delta.x * SENSITIVITY;
@@ -103,7 +116,8 @@ fn main() {
         primary_window: Some(Window {
             focused: true,
             title: "Voxel renderer".into(),
-            resolution: WindowResolution::new(800.0, 600.0),
+            // resolution: WindowResolution::new(800.0, 600.0),
+            mode: WindowMode::Fullscreen,
             ..Default::default()
         }),
         ..Default::default()

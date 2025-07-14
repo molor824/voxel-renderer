@@ -13,7 +13,7 @@ layout(set = 0, binding = 1, std430) readonly buffer Voxel {
     uint voxels[];
 } voxel;
 layout(set = 1, binding = 1, std140) uniform Colors {
-    uvec4 colors[256 / 4];
+    uvec4 colors[64];
 };
 
 struct HitInfo {
@@ -78,16 +78,20 @@ void main() {
     for (uint i = 0; i < i_iterations; i++) {
         HitInfo info = intersect_nearest(point, direction);
         vec4 hit_color = unpack_color(get_voxel_color(info.voxel_pos));
-        if (color.w == 0.0) {
-            color = hit_color;
+        if (color.w < 1.0) {
             normal = info.normal;
         }
+        vec3 cf = color.xyz; // foreground color
+        float af = color.w; // foreground alpha
+        vec3 cb = hit_color.xyz; // background color
+        float ab = hit_color.w; // background alpha
+        vec3 cr = cf * af + cb * (1.0 - af); // alpha-blending result rgb color
+        float ar = af + ab * (1.0 - af); // alpha-blending result alpha channel
+        color = vec4(cr, ar);
         point = info.intersection + direction * THRESHOLD;
     }
 
-    frag_color = color;
-    frag_normal = normal;
-
     float light_dot = (dot(normal, -LIGHT_DIR) + 1) * 0.5;
+    frag_normal = normal;
     frag_color = color * light_dot;
 }

@@ -94,7 +94,7 @@ impl FromWorld for Renderer {
             &DeviceDescriptor {
                 label: Some("Request device"),
                 required_features: Features::SPIRV_SHADER_PASSTHROUGH,
-                required_limits: Limits::downlevel_defaults(),
+                required_limits: Limits::default(),
                 memory_hints: MemoryHints::Performance,
             },
             None,

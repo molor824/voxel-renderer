@@ -96,7 +96,7 @@ impl FromWorld for Pipeline {
                     targets: &[Some(ColorTargetState {
                         format: renderer.config.format,
                         write_mask: ColorWrites::ALL,
-                        blend: None, // for now implement without alpha blending
+                        blend: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING), // for now implement without alpha blending
                     })],
                 }),
                 primitive: PrimitiveState {

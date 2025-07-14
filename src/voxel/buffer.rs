@@ -115,9 +115,9 @@ impl VoxelColors {
     // Color palette that contains every color of RGBA channels where each channel has 2bits
     pub fn all_color() -> Self {
         #[allow(invalid_value)]
-        let mut itself: Self = unsafe { MaybeUninit::uninit().assume_init() };
+        let mut itself: Self = Self([[0; 4]; 256]);
         for (i, color) in itself.0.iter_mut().enumerate() {
-            color[0] = (i as u8 & 0b11) * 85;
+            color[0] = (f32::powi((i as u8 & 0b11) as f32 / 3.0, 4) * 85.0) as u8; // alpha should be squared
             color[1] = (i as u8 >> 2 & 0b11) * 85;
             color[2] = (i as u8 >> 4 & 0b11) * 85;
             color[3] = (i as u8 >> 6 & 0b11) * 85;
